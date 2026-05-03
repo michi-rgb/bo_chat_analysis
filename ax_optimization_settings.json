@@ -1,0 +1,53 @@
+{
+  "parameters": [
+    {
+      "name": "x1",
+      "search_range": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "parameter_type": "float"
+    },
+    {
+      "name": "x2",
+      "search_range": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "parameter_type": "float"
+    },
+    {
+      "name": "x3",
+      "search_range": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "parameter_type": "float"
+    },
+    {
+      "name": "x4",
+      "search_range": {
+        "min": 0.0,
+        "max": 1.0
+      },
+      "parameter_type": "float"
+    }
+  ],
+  "objectives": [
+    {
+      "name": "quality",
+      "direction": "maximize",
+      "threshold": -1.5
+    },
+    {
+      "name": "speed",
+      "direction": "maximize",
+      "threshold": -1.5
+    },
+    {
+      "name": "efficiency",
+      "direction": "maximize",
+      "threshold": -1.2
+    }
+  ]
+}
