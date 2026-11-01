@@ -1,95 +1,38 @@
 # bo_chat_analysis
 
-Meta の [Ax](https://ax.dev/) ライブラリを使った**多目的ベイズ最適化**のデモと、ローカル LLM（Ollama）による**日本語結果解説生成**を組み合わせたプロジェクトです。
+Ax による 4 変数・3 目的のベイズ最適化のデモと、Codex による結果解説です。
 
----
+## 環境
 
-## ファイル構成
+Windows で uv と Python 3.14 を使います。依存関係は `pyproject.toml` に定義し、Ax 1.3.1 を指定しています。プロジェクトフォルダーで次を実行します。
 
-| ファイル | 説明 |
-|---|---|
-| `ax_moo.py` | 多目的最適化を実行するメインスクリプト |
-| `ax_config_and_summary_explainer.py` | Ollama を使って最適化結果を日本語 Markdown で解説するスクリプト |
-| `ax_optimization_settings.json` | 最適化設定（パラメータ・目的関数）の出力ファイル |
-| `ax_summary.csv` | 全試行のサマリーCSV（実行後に生成） |
-| `ax_client_snapshot.json` | Ax クライアントのスナップショット（実行後に生成） |
-| `ax_moo_analysis_report.html` | Plotly を使ったインタラクティブな分析レポート（実行後に生成） |
-| `ax_summary_explanation_ja.md` | LLM が生成した日本語解説（explainer 実行後に生成） |
-
----
-
-## 最適化問題の設定
-
-- **パラメータ**: `x1`, `x2`, `x3`, `x4` — それぞれ `[0.0, 1.0]` の連続値
-- **目的関数**: 以下の 3 つをすべて最大化
-
-| 目的関数 | 最適点 | 閾値 |
-|---|---|---|
-| `quality` | (x1, x2, x3, x4) ≈ (0.2, 0.8, 0.2, 0.8) | −1.5 |
-| `speed` | (x1, x2, x3, x4) ≈ (0.8, 0.2, 0.8, 0.2) | −1.5 |
-| `efficiency` | (x1, x2, x3, x4) ≈ (0.5, 0.5, 0.8, 0.2) | −1.2 |
-
-`quality` と `speed` は最適点が相反するため、**トレードオフ関係**が生じます。
-
-- **試行回数**: 30 回（Sobol 初期探索 + ベイズ最適化）
-
----
-
-## 使い方
-
-### 1. 依存パッケージのインストール
-
-```bash
-pip install ax-platform plotly
-# LLM 解説を使う場合
-pip install ollama
+```powershell
+uv sync
 ```
 
-Ollama 自体のインストールと、使用するモデル（デフォルト: `qwen3.5`）のプル:
+Python 3.14 が未導入の場合は、uv がダウンロードすることがあります。Ax とその依存パッケージもインストールされます。
 
-```bash
-# https://ollama.com からインストール後
-ollama pull qwen3.5
+## 最適化
+
+```powershell
+uv run python ax_moo.py
 ```
 
-### 2. 多目的最適化の実行
+既定では 30 試行を実行し、設定 JSON、試行結果 CSV、Ax スナップショット JSON、HTML 分析レポートをプロジェクト内に保存します。同名の既存結果は上書きされます。計算には時間がかかる場合があります。
 
-```bash
-python ax_moo.py
+## Codex で結果を解説
+
+このフォルダーで Codex を開始し、`$ax-result-explainer` を指定して最適化結果の解説を依頼してください。必要なら `ax_summary_explanation_ja.md` への保存も依頼できます。スキルは `.agents/skills/ax-result-explainer/SKILL.md` にあります。
+
+スキルはディレクトリごと別の Codex スキル配置先にコピーして使用できます。集計コードと uv の依存関係定義を同梱し、対象の結果ディレクトリを指定して読み込みます。スキル専用の環境は初回使用時に作成されます。最適化プログラムと次の集計コマンドはスキルを必要としません。
+
+スキルが参照する数値は、次のコマンドで確認できます。
+
+```powershell
+uv run python analysis_evidence.py
+uv run python analysis_evidence.py --settings path\to\settings.json --summary path\to\summary.csv
 ```
 
-実行後、以下のファイルが生成されます:
+CSV の完了試行に基づき、目的別の最良値、均等重みの参考順位、目的間の相関、設定された閾値を基準とした観測ハイパーボリュームを算出します。さらに同じ試行結果の Ax Client スナップショットからモデルを再学習し、符号付き一次 Sobol 感度を求めます。スナップショットの場所は `--snapshot` で変更でき、`--no-sobol` で感度計算を省略できます。符号は生の目的値の平均勾配の方向であり、最小化目的での改善方向は逆になります。
 
-- `ax_optimization_settings.json`
-- `ax_summary.csv`
-- `ax_client_snapshot.json`
-- `ax_moo_analysis_report.html`
-
-### 3. 日本語解説の生成
-
-```bash
-python ax_config_and_summary_explainer.py
-```
-
-`ax_summary_explanation_ja.md` に結果の解説が出力されます。
-
-主なオプション:
-
-```
---model MODEL         使用する Ollama モデル名 (デフォルト: qwen3.5)
---host HOST           Ollama ホスト URL (デフォルト: http://127.0.0.1:11434)
---thinking            Qwen thinking モードを有効化
---no-sobol            Sobol 感度分析をスキップ
---temperature FLOAT   サンプリング温度 (デフォルト: 0.2)
---max-tokens INT      最大生成トークン数 (デフォルト: 4096)
-```
-
----
-
-## 出力例
-
-- **ハイパーボリューム収束**: 試行 25 で最終値の 99% に到達（最終値: 2.074）
-- **トレードオフ**: `quality` vs `speed` の相関係数 r = −0.83（強いトレードオフ）
-- **トレードオン**: `speed` vs `efficiency` の相関係数 r = +0.83（正の相関）
-
-分析レポート (`ax_moo_analysis_report.html`) をブラウザで開くと、パレートフロントや平行座標プロットをインタラクティブに確認できます。
+既存の `ax_config_and_summary_explainer.py` は従来の Ollama 版として残していますが、Codex スキルでは使用しません。同スクリプトの旧 AxClient に依存するハイパーボリューム・感度分析は現行 Client のスナップショットには対応していません。

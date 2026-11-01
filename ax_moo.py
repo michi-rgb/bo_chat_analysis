@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import json
-import warnings
 from pathlib import Path
 
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 from ax.analysis.overview import OverviewAnalysis
 from ax.analysis.plotly.parallel_coordinates import ParallelCoordinatesPlot
-from ax.core.metric import Metric
-from ax.core.objective import MultiObjective, Objective
+from ax.core.objective import Objective
 from ax.core.optimization_config import MultiObjectiveOptimizationConfig
-from ax.core.outcome_constraint import ObjectiveThreshold
-from ax.core.types import ComparisonOp
+from ax.core.outcome_constraint import OutcomeConstraint
 from plotly.offline import get_plotlyjs
 
 # Objective thresholds: lower bounds for hypervolume calculation.
@@ -104,17 +101,14 @@ def main() -> None:
     # winsorize and hypervolume calculations use a shared reference point.
     client.set_optimization_config(
         MultiObjectiveOptimizationConfig(
-            objective=MultiObjective(
-                objectives=[
-                    Objective(metric=Metric(name=o["name"]), minimize=o["minimize"])
-                    for o in objective_configs
-                ]
+            objective=Objective(
+                expression=", ".join(o["name"] for o in objective_configs),
+                metric_name_to_signature={o["name"]: o["name"] for o in objective_configs},
             ),
             objective_thresholds=[
-                ObjectiveThreshold(
-                    metric=Metric(name=o["name"]),
-                    bound=o["threshold"],
-                    op=ComparisonOp.GEQ,
+                OutcomeConstraint(
+                    expression=f"{o['name']} >= {o['threshold']}",
+                    metric_name_to_signature={o["name"]: o["name"]},
                     relative=False,
                 )
                 for o in objective_configs
@@ -168,7 +162,7 @@ def main() -> None:
     print(f"Analysis cards computed: {len(cards)}")
     print(f"Saved analysis report: {output_path}")
 
-    client.save_to_json_file(filepath="ax_client_snapshot.json")
+    client.save_to_json_file(filepath=str(Path(__file__).with_name("ax_client_snapshot.json")))
     summary = client.summarize()
     print("Experiment summary:")
     print(summary)
