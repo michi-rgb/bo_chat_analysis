@@ -20,6 +20,8 @@ uv run python ax_moo.py
 
 既定では 30 試行を実行し、設定 JSON、試行結果 CSV、Ax スナップショット JSON、HTML 分析レポートをプロジェクト内に保存します。同名の既存結果は上書きされます。計算には時間がかかる場合があります。
 
+レポート先頭の Parallel Coordinates では、全パラメータと全目的を一緒に表示します。橙色は完了試行の観測値に基づくパレート最適、灰色はその他の試行です。目標閾値はパレート判定に適用しません。軸をドラッグして表示範囲を絞り込めます。目的別の図もレポート内に残しています。
+
 ## Codex で結果を解説
 
 このフォルダーで Codex を開始し、`$ax-result-explainer` を指定して最適化結果の解説を依頼してください。必要なら `ax_summary_explanation_ja.md` への保存も依頼できます。スキルは `.agents/skills/ax-result-explainer/SKILL.md` にあります。

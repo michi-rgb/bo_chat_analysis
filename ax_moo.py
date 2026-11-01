@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 import json
+import math
+import re
 from pathlib import Path
 
 from ax.api.client import Client
@@ -11,6 +14,7 @@ from ax.core.objective import Objective
 from ax.core.optimization_config import MultiObjectiveOptimizationConfig
 from ax.core.outcome_constraint import OutcomeConstraint
 from plotly.offline import get_plotlyjs
+import plotly.graph_objects as go
 
 # Objective thresholds: lower bounds for hypervolume calculation.
 # Parameters: x1, x2, x3, x4 in [0, 1]
@@ -47,9 +51,73 @@ def evaluate(parameters: dict[str, float]) -> dict[str, float]:
     return {"quality": quality, "speed": speed, "efficiency": efficiency}
 
 
-def save_cards_as_html(cards: list, output_path: Path) -> None:
+def fix_graphviz_svg(html: str) -> str:
+    """Decode Graphviz SVG byte literals produced by Ax's HTML renderer."""
+    # Ax's Graphviz card currently embeds the repr of SVG bytes in its HTML.
+    # Decode only those byte literals so the browser renders the inline SVG.
+    def decode_graphviz_svg(match: re.Match[str]) -> str:
+        svg = ast.literal_eval(match.group(1)).decode("utf-8")
+        start, end = svg.find("<svg"), svg.rfind("</svg>")
+        if start < 0 or end < 0:
+            return match.group(0)
+        return "<div>" + svg[start : end + len("</svg>")] + "</div>"
+
+    return re.sub(
+        r"<div>(b(['\"])<\?xml.*?\2)</div>", decode_graphviz_svg, html
+    )
+
+
+def all_objectives_plot(summary, parameter_names: list[str], objective_configs: list[dict]) -> str:
+    """Render completed observed trials, highlighting the observed Pareto frontier."""
+    names = parameter_names + [objective["name"] for objective in objective_configs]
+    rows = []
+    for _, row in summary.iterrows():
+        if str(row["trial_status"]).upper() != "COMPLETED":
+            continue
+        try:
+            values = [float(row[name]) for name in names]
+            trial_index = int(row["trial_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if all(math.isfinite(value) for value in values):
+            rows.append((trial_index, values))
+    if not rows:
+        return '<section id="all-objectives"><h2>Parallel Coordinates — 全目的</h2><p>表示可能な完了試行がありません。</p></section>'
+
+    n_params = len(parameter_names)
+    scores = [
+        [(-value if objective["minimize"] else value)
+         for value, objective in zip(values[n_params:], objective_configs)]
+        for _, values in rows
+    ]
+    pareto = [
+        not any(all(b >= a for a, b in zip(point, other))
+                and any(b > a for a, b in zip(point, other))
+                for other in scores)
+        for point in scores
+    ]
+    dimensions = [dict(label="試行番号", values=[trial for trial, _ in rows])]
+    dimensions.extend(dict(label=name, values=[values[i] for _, values in rows])
+                      for i, name in enumerate(names))
+    fig = go.Figure(go.Parcoords(
+        dimensions=dimensions,
+        line=dict(color=[int(is_pareto) for is_pareto in pareto], cmin=0, cmax=1,
+                  colorscale=[[0, "#aeb8c4"], [0.499, "#aeb8c4"],
+                              [0.5, "#d05a23"], [1, "#d05a23"]], showscale=False),
+    ))
+    fig.update_layout(margin=dict(l=60, r=60, t=40, b=35), height=520)
+    plot = fig.to_html(full_html=False, include_plotlyjs=False)
+    return (f'<section id="all-objectives"><h2>Parallel Coordinates — 全目的</h2>'
+            f'<p>完了試行 {len(rows)} 件。橙色: 観測値に基づくパレート最適 {sum(pareto)} 件、'
+            '灰色: ほかの試行。各軸の範囲をドラッグして絞り込めます。'
+            '判定に目標閾値は適用していません。</p>'
+            f'{plot}</section>')
+
+
+def save_cards_as_html(cards: list, output_path: Path, summary, parameter_names: list[str],
+                       objective_configs: list[dict]) -> None:
     """Render AnalysisCards returned by client.compute_analyses() to an HTML report."""
-    card_html = "\n".join(card._to_html(depth=0) for card in cards)
+    card_html = fix_graphviz_svg("\n".join(card._to_html(depth=0) for card in cards))
     html = f"""<!doctype html>
 <html lang=\"ja\">
 <head>
@@ -59,6 +127,7 @@ def save_cards_as_html(cards: list, output_path: Path) -> None:
 </head>
 <body>
   <h1>Ax Multi-Objective Analysis Report</h1>
+  {all_objectives_plot(summary, parameter_names, objective_configs)}
   {card_html}
 </body>
 </html>
@@ -156,14 +225,16 @@ def main() -> None:
     cards = client.compute_analyses(analyses=analyses, display=False)
 
     output_path = Path(__file__).with_name("ax_moo_analysis_report.html")
-    save_cards_as_html(cards=cards, output_path=output_path)
+    summary = client.summarize()
+    save_cards_as_html(cards=cards, output_path=output_path, summary=summary,
+                       parameter_names=[p["name"] for p in parameter_configs],
+                       objective_configs=objective_configs)
 
     print(f"Trials completed: {n_trials}")
     print(f"Analysis cards computed: {len(cards)}")
     print(f"Saved analysis report: {output_path}")
 
     client.save_to_json_file(filepath=str(Path(__file__).with_name("ax_client_snapshot.json")))
-    summary = client.summarize()
     print("Experiment summary:")
     print(summary)
 
