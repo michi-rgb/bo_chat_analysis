@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 from pathlib import Path
 
 from summary import (
@@ -72,21 +73,47 @@ def print_sobol(settings, rows, snapshot: Path) -> None:
         print(f"unavailable={type(exc).__name__}: {exc}")
 
 
+def find_data_directory(current_dir: Path, settings_name: str, summary_name: str) -> Path:
+    def has_inputs(directory: Path) -> bool:
+        return (directory / settings_name).is_file() and (directory / summary_name).is_file()
+
+    if has_inputs(current_dir):
+        return current_dir
+
+    results_dir = current_dir if current_dir.name == "results" else current_dir / "results"
+    if not results_dir.is_dir():
+        return current_dir
+
+    completed_runs = (
+        (int(match[1]), entry)
+        for entry in results_dir.iterdir()
+        if (match := re.fullmatch(r"result_([1-9][0-9]*)", entry.name)) and has_inputs(entry)
+    )
+    fallback_dir = results_dir if has_inputs(results_dir) else current_dir
+    return max(completed_runs, default=(0, fallback_dir))[1]
+
+
 def main() -> None:
-    here = Path.cwd()
+    settings_name = "ax_optimization_settings.json"
+    summary_name = "ax_summary.csv"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--settings", type=Path, default=here / "ax_optimization_settings.json")
-    parser.add_argument("--summary", type=Path, default=here / "ax_summary.csv")
+    parser.add_argument("--settings", type=Path)
+    parser.add_argument("--summary", type=Path)
     parser.add_argument("--snapshot", type=Path, help="Ax Client snapshot; defaults to the summary directory")
     parser.add_argument("--no-sobol", action="store_true", help="skip model fitting and Sobol analysis")
     args = parser.parse_args()
-    settings = load_settings(args.settings)
-    rows = load_summary_rows(args.summary)
+    data_dir = Path.cwd()
+    if args.settings is None and args.summary is None:
+        data_dir = find_data_directory(data_dir, settings_name, summary_name)
+    settings_path = args.settings or data_dir / settings_name
+    summary_path = args.summary or data_dir / summary_name
+    settings = load_settings(settings_path)
+    rows = load_summary_rows(summary_path)
     completed = [row for row in rows if row.get("trial_status", "").upper() == "COMPLETED"]
     complete_values = [row for row in completed if all(
         _safe_float(str(row.get(obj.name, ""))) is not None for obj in settings.objectives
     )]
-    print(f"[input] settings={args.settings} summary={args.summary}")
+    print(f"[input] settings={settings_path} summary={summary_path}")
     print(f"total_rows={len(rows)} completed_rows={len(completed)} complete_objective_rows={len(complete_values)}")
     print(build_dataset_summary(settings, complete_values))
 
@@ -117,7 +144,7 @@ def main() -> None:
     else:
         print("unavailable=no completed rows with all objectives")
     if not args.no_sobol:
-        print_sobol(settings, complete_values, args.snapshot or args.summary.with_name("ax_client_snapshot.json"))
+        print_sobol(settings, complete_values, args.snapshot or summary_path.with_name("ax_client_snapshot.json"))
 
 
 if __name__ == "__main__":

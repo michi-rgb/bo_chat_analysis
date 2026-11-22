@@ -4,6 +4,7 @@ import ast
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 from ax.api.client import Client
@@ -15,6 +16,9 @@ from ax.core.optimization_config import MultiObjectiveOptimizationConfig
 from ax.core.outcome_constraint import OutcomeConstraint
 from plotly.offline import get_plotlyjs
 import plotly.graph_objects as go
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".agents/skills/ax-result-explainer/scripts"))
+from report_languages import ENGLISH_COUNT, write_report_pair
 
 # Objective thresholds: lower bounds for hypervolume calculation.
 # Parameters: x1, x2, x3, x4 in [0, 1]
@@ -82,7 +86,8 @@ def all_objectives_plot(summary, parameter_names: list[str], objective_configs: 
         if all(math.isfinite(value) for value in values):
             rows.append((trial_index, values))
     if not rows:
-        return '<section id="all-objectives"><h2>Parallel Coordinates — 全目的</h2><p>表示可能な完了試行がありません。</p></section>'
+        return ('<section id="all-objectives"><h2>Parallel Coordinates — All Objectives</h2>'
+                '<p>No completed trials with plottable values.</p></section>')
 
     n_params = len(parameter_names)
     scores = [
@@ -96,7 +101,7 @@ def all_objectives_plot(summary, parameter_names: list[str], objective_configs: 
                 for other in scores)
         for point in scores
     ]
-    dimensions = [dict(label="試行番号", values=[trial for trial, _ in rows])]
+    dimensions = [dict(label="Trial Index", values=[trial for trial, _ in rows])]
     dimensions.extend(dict(label=name, values=[values[i] for _, values in rows])
                       for i, name in enumerate(names))
     fig = go.Figure(go.Parcoords(
@@ -107,19 +112,17 @@ def all_objectives_plot(summary, parameter_names: list[str], objective_configs: 
     ))
     fig.update_layout(margin=dict(l=60, r=60, t=40, b=35), height=520)
     plot = fig.to_html(full_html=False, include_plotlyjs=False)
-    return (f'<section id="all-objectives"><h2>Parallel Coordinates — 全目的</h2>'
-            f'<p>完了試行 {len(rows)} 件。橙色: 観測値に基づくパレート最適 {sum(pareto)} 件、'
-            '灰色: ほかの試行。各軸の範囲をドラッグして絞り込めます。'
-            '判定に目標閾値は適用していません。</p>'
+    return (f'<section id="all-objectives"><h2>Parallel Coordinates — All Objectives</h2>'
+            f'<p>{ENGLISH_COUNT.format(len(rows), sum(pareto))}</p>'
             f'{plot}</section>')
 
 
-def save_cards_as_html(cards: list, output_path: Path, summary, parameter_names: list[str],
-                       objective_configs: list[dict]) -> None:
-    """Render AnalysisCards returned by client.compute_analyses() to an HTML report."""
+def save_cards_as_html(cards: list, results_dir: Path, summary, parameter_names: list[str],
+                       objective_configs: list[dict]) -> tuple[Path, Path]:
+    """Render AnalysisCards to English and Japanese HTML reports."""
     card_html = fix_graphviz_svg("\n".join(card._to_html(depth=0) for card in cards))
     html = f"""<!doctype html>
-<html lang=\"ja\">
+<html lang=\"en\">
 <head>
   <meta charset=\"utf-8\" />
   <title>Ax Multi-Objective Analysis Report</title>
@@ -132,7 +135,25 @@ def save_cards_as_html(cards: list, output_path: Path, summary, parameter_names:
 </body>
 </html>
 """
-    output_path.write_text(html, encoding="utf-8")
+    return write_report_pair(html, results_dir)
+
+
+def create_result_directory(results_dir: Path) -> Path:
+    results_dir.mkdir(exist_ok=True)
+    existing_numbers = (
+        int(match[1])
+        for entry in results_dir.iterdir()
+        if (match := re.fullmatch(r"result_([1-9][0-9]*)", entry.name))
+    )
+    run_number = max(existing_numbers, default=0) + 1
+    while True:
+        run_dir = results_dir / f"result_{run_number}"
+        try:
+            run_dir.mkdir()
+        except FileExistsError:
+            run_number += 1
+        else:
+            return run_dir
 
 
 def main() -> None:
@@ -185,7 +206,8 @@ def main() -> None:
         )
     )
 
-    optimization_settings_path = Path(__file__).with_name("ax_optimization_settings.json")
+    results_dir = create_result_directory(Path(__file__).resolve().parents[1] / "results")
+    optimization_settings_path = results_dir / "ax_optimization_settings.json"
     optimization_settings = {
         "parameters": [
             {
@@ -209,7 +231,6 @@ def main() -> None:
     )
     print(f"Saved optimization settings: {optimization_settings_path}")
 
-    
     for _ in range(n_trials):
         trials = client.get_next_trials(max_trials=1)
         trial_index, params = next(iter(trials.items()))
@@ -224,27 +245,28 @@ def main() -> None:
     ]
     cards = client.compute_analyses(analyses=analyses, display=False)
 
-    output_path = Path(__file__).with_name("ax_moo_analysis_report.html")
     summary = client.summarize()
-    save_cards_as_html(cards=cards, output_path=output_path, summary=summary,
-                       parameter_names=[p["name"] for p in parameter_configs],
-                       objective_configs=objective_configs)
+    report_paths = save_cards_as_html(cards=cards, results_dir=results_dir, summary=summary,
+                                     parameter_names=[p["name"] for p in parameter_configs],
+                                     objective_configs=objective_configs)
 
     print(f"Trials completed: {n_trials}")
     print(f"Analysis cards computed: {len(cards)}")
-    print(f"Saved analysis report: {output_path}")
+    for report_path in report_paths:
+        print(f"Saved analysis report: {report_path}")
 
-    client.save_to_json_file(filepath=str(Path(__file__).with_name("ax_client_snapshot.json")))
+    client.save_to_json_file(filepath=str(results_dir / "ax_client_snapshot.json"))
     print("Experiment summary:")
     print(summary)
 
-    summary_csv_path = Path(__file__).with_name("ax_summary.csv")
+    summary_csv_path = results_dir / "ax_summary.csv"
     if hasattr(summary, "to_csv"):
-        summary.to_csv(summary_csv_path, index=False)
+        temporary_csv_path = summary_csv_path.with_suffix(".csv.tmp")
+        summary.to_csv(temporary_csv_path, index=False)
+        temporary_csv_path.replace(summary_csv_path)
         print(f"Saved summary csv: {summary_csv_path}")
 
     return summary
 
 if __name__ == "__main__":
     main()
-    # new_client = Client.load_from_json_file(filepath="ax_client_snapshot.json")
